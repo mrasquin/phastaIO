@@ -39,7 +39,7 @@
 #define inv1024sq 953.674316406e-9 // = 1/1024/1024
 int MasterHeaderSize = -1;
 
-bool PRINT_PERF = true; //false; //true; // default print any perf results
+bool PRINT_PERF = false; //true; // default print no perf results
 int irank = -1; // global rank, should never be manually manipulated
 int mysize = -1;
 
@@ -254,7 +254,11 @@ namespace{
 					strncpy( text_header, Line, real_length );
 					text_header[ real_length ] =static_cast<char>(NULL);
 					token = strtok ( text_header, ":" );
-					if( cscompare( phrase , token ) ) {
+					//if( cscompare( phrase , token ) ) {
+                                        // Double comparison required because different fields can still start
+                                        // with the same name for mixed meshes (nbc code, nbc values, etc).
+                                        // Would be easy to fix cscompare instead but would it break sth else?
+					if( cscompare( phrase , token ) && cscompare( token , phrase ) ) {
 						FOUND = true ;
 						token = strtok( NULL, " ,;<>" );
 						skip_size = atoi( token );
