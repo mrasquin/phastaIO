@@ -301,7 +301,7 @@ namespace{
 
 			if ( !FOUND ) {
 				//fprintf(stderr, "Error: Could not find: %s\n", phrase);
-				if(irank == 0) printf("Warning: Could not find: %s\n", phrase);
+				if(irank == 0) printf("WARNING: Could not find: %s\n", phrase);
 				return 1;
 			}
 			return 0;
@@ -1265,7 +1265,7 @@ void readheader( int* fileDescriptor,
 		if (!FOUND)
 		{
 			//if(irank==0) printf("Warning readheader: Not found %s \n",keyphrase); //PhastaIOActiveFiles[i]->myrank is certainly initialized here.
-			if(PhastaIOActiveFiles[i]->myrank == 0) printf("Warning readheader: Not found %s\n",keyphrase);
+			if(PhastaIOActiveFiles[i]->myrank == 0) printf("WARNING readheader: Not found %s\n",keyphrase);
                         endTimer(&timer_end);
                         printPerf("readheader", timer_start, timer_end, 0, 0, "");
 			return;
