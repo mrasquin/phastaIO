@@ -947,7 +947,7 @@ void openfile(const char filename[],
 			else //else not valid MPI file
 			{
 				*fileDescriptor = NOT_A_MPI_FILE;
-				printf("Error openfile: The file %s you opened is not in syncIO new format, please check again! File descriptor = %d, MasterHeaderSize = %d\n",fname,*fileDescriptor,MasterHeaderSize);
+				printf("Error openfile: The file %s you opened is not in syncIO new format, please check again! File descriptor = %d, MasterHeaderSize = %d, read_out_tag = %s\n",fname,*fileDescriptor,MasterHeaderSize,read_out_tag);
 				//Printing MasterHeaderSize is useful to test a compiler bug on Intrepid BGP
                                 endTimer(&timer_end);
                                 printPerf("openfile", timer_start, timer_end, 0, 0, "");
