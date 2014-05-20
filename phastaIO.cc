@@ -39,9 +39,16 @@
 #define inv1024sq 953.674316406e-9 // = 1/1024/1024
 int MasterHeaderSize = -1;
 
-bool PRINT_PERF = false; //true; // default print no perf results
+bool PRINT_PERF = true; // false; //true; // default print no perf results
 int irank = -1; // global rank, should never be manually manipulated
 int mysize = -1;
+
+// Static variables are bad but used here to store the subcommunicator and associated variables
+// Prevent MPI_Comm_split to be called more than once, especially on BGQ with the V1R2M1 driver (leak detected in MPI_Comm_split - IBM working on it)
+static int s_assign_local_comm = 0;
+static MPI_Comm s_local_comm;
+static int s_local_size = -1;
+static int s_local_rank = -1;
 
 //unsigned long long pool_align = 8;
 //unsigned long long mem_address;
@@ -650,15 +657,45 @@ int initphmpiio( int *nfields, int *nppf, int *nfiles, int *filehandle, const ch
 	MPI_Comm_rank(MPI_COMM_WORLD, &(PhastaIOActiveFiles[i]->myrank));
 	MPI_Comm_size(MPI_COMM_WORLD, &(PhastaIOActiveFiles[i]->numprocs));
 
-	int color = computeColor(PhastaIOActiveFiles[i]->myrank, PhastaIOActiveFiles[i]->numprocs, PhastaIOActiveFiles[i]->nFiles);
-	MPI_Comm_split(MPI_COMM_WORLD,
-			color,
-			PhastaIOActiveFiles[i]->myrank,
-			&(PhastaIOActiveFiles[i]->local_comm));
-	MPI_Comm_size(PhastaIOActiveFiles[i]->local_comm,
-			&(PhastaIOActiveFiles[i]->local_numprocs));
-	MPI_Comm_rank(PhastaIOActiveFiles[i]->local_comm,
-			&(PhastaIOActiveFiles[i]->local_myrank));
+
+	if( *nfiles > 1 ) { // split the ranks according to each mpiio file
+
+		if ( s_assign_local_comm == 0) { // call mpi_comm_split for the first (and only) time
+
+			if (PhastaIOActiveFiles[i]->myrank == 0) printf("Building subcommunicator\n");
+
+			int color = computeColor(PhastaIOActiveFiles[i]->myrank, PhastaIOActiveFiles[i]->numprocs, PhastaIOActiveFiles[i]->nFiles);
+			MPI_Comm_split(MPI_COMM_WORLD,
+					color,
+					PhastaIOActiveFiles[i]->myrank,
+					&(PhastaIOActiveFiles[i]->local_comm));
+			MPI_Comm_size(PhastaIOActiveFiles[i]->local_comm,
+					&(PhastaIOActiveFiles[i]->local_numprocs));
+			MPI_Comm_rank(PhastaIOActiveFiles[i]->local_comm,
+					&(PhastaIOActiveFiles[i]->local_myrank));
+
+			// back up now these variables so that we do not need to call comm_split again
+			s_local_comm = PhastaIOActiveFiles[i]->local_comm;
+			s_local_size = PhastaIOActiveFiles[i]->local_numprocs;
+			s_local_rank = PhastaIOActiveFiles[i]->local_myrank;
+			s_assign_local_comm = 1;
+		}
+		else { // recycle the subcommunicator
+			if (PhastaIOActiveFiles[i]->myrank == 0) printf("Recycling subcommunicator\n");
+			PhastaIOActiveFiles[i]->local_comm = s_local_comm;
+			PhastaIOActiveFiles[i]->local_numprocs = s_local_size;
+			PhastaIOActiveFiles[i]->local_myrank = s_local_rank;
+		}
+	}
+	else { // *nfiles == 1 here - no need to call mpi_comm_split here 
+
+		if (PhastaIOActiveFiles[i]->myrank == 0) printf("Bypassing subcommunicator\n");
+		PhastaIOActiveFiles[i]->local_comm = MPI_COMM_WORLD;
+		PhastaIOActiveFiles[i]->local_numprocs = PhastaIOActiveFiles[i]->numprocs;
+		PhastaIOActiveFiles[i]->local_myrank = PhastaIOActiveFiles[i]->myrank;
+
+	}
+
 	PhastaIOActiveFiles[i]->nppp =
 		PhastaIOActiveFiles[i]->nPPF/PhastaIOActiveFiles[i]->local_numprocs;
 
