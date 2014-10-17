@@ -6,6 +6,7 @@
 #define _PHASTAIO_H_
 
 #include <FCMangle.h>
+#include <mpi.h>
 
 #ifdef intel
 #define ios_base ios
@@ -13,6 +14,7 @@
 
 #define queryphmpiio FortranCInterface_GLOBAL_(queryphmpiio,QUERYPHMPIIO)
 #define initphmpiio FortranCInterface_GLOBAL_(initphmpiio,INITPHMPIIO)
+#define initphmpiiosub FortranCInterface_GLOBAL_(initphmpiiosub,INITPHMPIIOSUB)
 #define finalizephmpiio FortranCInterface_GLOBAL_(finalizephmpiio,FINALIZEPHMPIIO)
 
 #define openfile FortranCInterface_GLOBAL_(openfile, OPENFILE)
@@ -44,6 +46,13 @@ extern "C" {
 		int *nfiles,
 		int *filehandle,
 		const char mode[] );
+  int
+  initphmpiiosub( int *nfields,
+		  int *nppf,
+		  int *nfiles,
+		  int *filehandle,
+		  const char mode[],
+                  MPI_Comm my_local_comm );
 
   void
   finalizephmpiio( int *fileDescriptor );

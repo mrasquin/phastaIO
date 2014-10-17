@@ -39,7 +39,7 @@
 #define inv1024sq 953.674316406e-9 // = 1/1024/1024
 int MasterHeaderSize = -1;
 
-bool PRINT_PERF = true; // false; //true; // default print no perf results
+bool PRINT_PERF = false; // default print no perf results
 int irank = -1; // global rank, should never be manually manipulated
 int mysize = -1;
 
@@ -816,6 +816,180 @@ void finalizephmpiio( int *fileDescriptor )
 
 	PhastaIONextActiveIndex--;
 }
+
+
+/**
+ * Special init for M2N in order to create a subcommunicator for the reduced solution (requires PRINT_PERF to be false for now) 
+ * Initialize the file struct members and allocate space for file struct buffers.
+ *
+ * Note: this function is only called when we are using new format. Old POSIX
+ * format should skip this routine and call openfile() directly instead.
+ */
+int initphmpiiosub( int *nfields, int *nppf, int *nfiles, int *filehandle, const char mode[],MPI_Comm my_local_comm)
+{
+	// we init irank again in case query not called (e.g. syncIO write case)
+      
+	MPI_Comm_rank(my_local_comm, &irank);
+	MPI_Comm_size(my_local_comm, &mysize);
+
+	phprintf("Info initphmpiio: entering function, myrank = %d, MasterHeaderSize = %d", irank, MasterHeaderSize);
+
+	double timer_start, timer_end;
+	startTimer(&timer_start);
+
+	char* imode = StringStripper( mode );
+
+	// Note: if it's read, we presume query was called prior to init and
+	// MasterHeaderSize is already set to correct value from parsing header
+	// otherwise it's write then it needs some computation to be set
+	if ( cscompare( "read", imode ) ) {
+		// do nothing
+	}
+	else if( cscompare( "write", imode ) ) {
+		MasterHeaderSize =  computeMHSize(*nfields, *nppf, LATEST_WRITE_VERSION);
+	}
+	else {
+		printf("Error initphmpiio: can't recognize the mode %s", imode);
+                exit(1);
+	}
+        free ( imode );
+
+	phprintf("Info initphmpiio: myrank = %d, MasterHeaderSize = %d", irank, MasterHeaderSize);
+
+	int i, j;
+
+	if( PhastaIONextActiveIndex == MAX_PHASTA_FILES ) {
+		printf("Error initphmpiio: PhastaIONextActiveIndex = MAX_PHASTA_FILES");
+                endTimer(&timer_end);
+	        printPerf("initphmpiio", timer_start, timer_end, 0, 0, "");
+		return MAX_PHASTA_FILES_EXCEEDED;
+	}
+	//		else if( PhastaIONextActiveIndex == 0 )  //Hang in debug mode on Intrepid
+	//		{
+	//			for( i = 0; i < MAX_PHASTA_FILES; i++ );
+	//			{
+	//				PhastaIOActiveFiles[i] = NULL;
+	//			}
+	//		}
+
+
+	PhastaIOActiveFiles[PhastaIONextActiveIndex] = (phastaio_file_t *)calloc( 1,  sizeof( phastaio_file_t) );
+	//PhastaIOActiveFiles[PhastaIONextActiveIndex] = ( phastaio_file_t *)calloc( 1 + 1, sizeof( phastaio_file_t ) );
+	//mem_address = (long long )PhastaIOActiveFiles[PhastaIONextActiveIndex];
+	//if( mem_address & (pool_align -1) )
+	//	PhastaIOActiveFiles[PhastaIONextActiveIndex] += pool_align - (mem_address & (pool_align -1));
+
+	i = PhastaIONextActiveIndex;
+	PhastaIONextActiveIndex++;
+
+	//PhastaIOActiveFiles[i]->next_start_address = 2*TWO_MEGABYTE;
+
+	PhastaIOActiveFiles[i]->next_start_address = MasterHeaderSize;  // what does this mean??? TODO
+
+	PhastaIOActiveFiles[i]->Wrong_Endian = false;
+
+	PhastaIOActiveFiles[i]->nFields = *nfields;
+	PhastaIOActiveFiles[i]->nPPF = *nppf;
+	PhastaIOActiveFiles[i]->nFiles = *nfiles;
+	MPI_Comm_rank(my_local_comm, &(PhastaIOActiveFiles[i]->myrank));
+	MPI_Comm_size(my_local_comm, &(PhastaIOActiveFiles[i]->numprocs));
+
+	int color = computeColor(PhastaIOActiveFiles[i]->myrank, PhastaIOActiveFiles[i]->numprocs, PhastaIOActiveFiles[i]->nFiles);
+	MPI_Comm_split(my_local_comm,
+			color,
+			PhastaIOActiveFiles[i]->myrank,
+			&(PhastaIOActiveFiles[i]->local_comm));
+	MPI_Comm_size(PhastaIOActiveFiles[i]->local_comm,
+			&(PhastaIOActiveFiles[i]->local_numprocs));
+	MPI_Comm_rank(PhastaIOActiveFiles[i]->local_comm,
+			&(PhastaIOActiveFiles[i]->local_myrank));
+	PhastaIOActiveFiles[i]->nppp =
+		PhastaIOActiveFiles[i]->nPPF/PhastaIOActiveFiles[i]->local_numprocs;
+
+	PhastaIOActiveFiles[i]->start_id = PhastaIOActiveFiles[i]->nPPF *
+		(int)(PhastaIOActiveFiles[i]->myrank/PhastaIOActiveFiles[i]->local_numprocs) +
+		(PhastaIOActiveFiles[i]->local_myrank * PhastaIOActiveFiles[i]->nppp);
+
+	PhastaIOActiveFiles[i]->my_offset_table =
+		( unsigned long long ** ) calloc( MAX_FIELDS_NUMBER , sizeof( unsigned long long *) );
+	//( unsigned long long **)calloc( MAX_FIELDS_NUMBER + pool_align, sizeof(unsigned long long *) );
+	//mem_address = (long long )PhastaIOActiveFiles[i]->my_offset_table;
+	//if( mem_address & (pool_align -1) )
+	//	PhastaIOActiveFiles[i]->my_offset_table += pool_align - (mem_address & (pool_align -1));
+
+	PhastaIOActiveFiles[i]->my_read_table =
+		( unsigned long long ** ) calloc( MAX_FIELDS_NUMBER , sizeof( unsigned long long *) );
+	//( unsigned long long **)calloc( MAX_FIELDS_NUMBER + pool_align, sizeof( unsigned long long *) );
+	//mem_address = (long long )PhastaIOActiveFiles[i]->my_read_table;
+	//if( mem_address & (pool_align -1) )
+	//	PhastaIOActiveFiles[i]->my_read_table += pool_align - (mem_address & (pool_align -1));
+
+	for (j=0; j<*nfields; j++)
+	{
+		PhastaIOActiveFiles[i]->my_offset_table[j] =
+			( unsigned long long * ) calloc( PhastaIOActiveFiles[i]->nppp , sizeof( unsigned long long) );
+		//( unsigned long long * ) calloc( PhastaIOActiveFiles[i]->nppp + pool_align, sizeof( unsigned long long)  );
+		//mem_address = (long long )PhastaIOActiveFiles[i]->my_offset_table[j];
+		//if( mem_address & (pool_align -1) )
+		//	PhastaIOActiveFiles[i]->my_offset_table[j] += pool_align - (mem_address & (pool_align -1));
+
+		PhastaIOActiveFiles[i]->my_read_table[j] =
+			( unsigned long long * ) calloc( PhastaIOActiveFiles[i]->nppp , sizeof( unsigned long long) );
+		//( unsigned long long * ) calloc( PhastaIOActiveFiles[i]->nppp , sizeof( unsigned long long) + pool_align );
+		//mem_address = (long long )PhastaIOActiveFiles[i]->my_read_table[j];
+		//if( mem_address & (pool_align -1) )
+		//	PhastaIOActiveFiles[i]->my_read_table[j] += pool_align - (mem_address & (pool_align -1));
+	}
+	*filehandle = i;
+
+	PhastaIOActiveFiles[i]->master_header = (char *)calloc(MasterHeaderSize,sizeof( char ));
+	PhastaIOActiveFiles[i]->double_chunk = (double *)calloc(1,sizeof( double ));
+	PhastaIOActiveFiles[i]->int_chunk = (int *)calloc(1,sizeof( int ));
+	PhastaIOActiveFiles[i]->read_double_chunk = (double *)calloc(1,sizeof( double ));
+	PhastaIOActiveFiles[i]->read_int_chunk = (int *)calloc(1,sizeof( int ));
+
+	/*
+		 PhastaIOActiveFiles[i]->master_header =
+		 ( char * ) calloc( MasterHeaderSize + pool_align, sizeof( char )  );
+		 mem_address = (long long )PhastaIOActiveFiles[i]->master_header;
+		 if( mem_address & (pool_align -1) )
+		 PhastaIOActiveFiles[i]->master_header += pool_align - (mem_address & (pool_align -1));
+
+		 PhastaIOActiveFiles[i]->double_chunk =
+		 ( double * ) calloc( 1 + pool_align , sizeof( double ) );
+		 mem_address = (long long )PhastaIOActiveFiles[i]->double_chunk;
+		 if( mem_address & (pool_align -1) )
+		 PhastaIOActiveFiles[i]->double_chunk += pool_align - (mem_address & (pool_align -1));
+
+		 PhastaIOActiveFiles[i]->int_chunk =
+		 ( int * ) calloc( 1 + pool_align , sizeof( int ) );
+		 mem_address = (long long )PhastaIOActiveFiles[i]->int_chunk;
+		 if( mem_address & (pool_align -1) )
+		 PhastaIOActiveFiles[i]->int_chunk += pool_align - (mem_address & (pool_align -1));
+
+		 PhastaIOActiveFiles[i]->read_double_chunk =
+		 ( double * ) calloc( 1 + pool_align , sizeof( double ) );
+		 mem_address = (long long )PhastaIOActiveFiles[i]->read_double_chunk;
+		 if( mem_address & (pool_align -1) )
+		 PhastaIOActiveFiles[i]->read_double_chunk += pool_align - (mem_address & (pool_align -1));
+
+		 PhastaIOActiveFiles[i]->read_int_chunk =
+		 ( int * ) calloc( 1 + pool_align , sizeof( int ) );
+		 mem_address = (long long )PhastaIOActiveFiles[i]->read_int_chunk;
+		 if( mem_address & (pool_align -1) )
+		 PhastaIOActiveFiles[i]->read_int_chunk += pool_align - (mem_address & (pool_align -1));
+		 */
+
+	// Time monitoring
+	endTimer(&timer_end);
+	printPerf("initphmpiiosub", timer_start, timer_end, 0, 0, "");
+
+	phprintf_0("Info initphmpiiosub: quiting function");
+
+	return i;
+}
+
+
 
 /** open file for both POSIX and MPI-IO syncIO format.
  *
